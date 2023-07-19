@@ -27,6 +27,7 @@
 #include <KConfigGroup>
 #include <KDBusService>
 #include <KDirWatch>
+#include <KPluginFactory>
 #include <KPluginInfo>
 #include <KPluginMetaData>
 #include <KServiceTypeTrader>
@@ -35,6 +36,8 @@
 #ifdef Q_OS_OSX
 #include <CoreFoundation/CoreFoundation.h>
 #endif
+
+#include <memory>
 
 Q_DECLARE_LOGGING_CATEGORY(KDED)
 
@@ -60,7 +63,7 @@ static void runKonfUpdate()
 }
 
 Kded::Kded()
-    : m_pDirWatch(nullptr)
+    : m_pDirWatch(new KDirWatch(this))
     , m_pTimer(new QTimer(this))
     , m_needDelayedCheck(false)
 {
@@ -88,10 +91,8 @@ Kded::~Kded()
 {
     _self = nullptr;
     m_pTimer->stop();
-    delete m_pTimer;
-    delete m_pDirWatch;
 
-    for (QHash<QString, KDEDModule *>::const_iterator it(m_modules.constBegin()), itEnd(m_modules.constEnd()); it != itEnd; ++it) {
+    for (auto it = m_modules.cbegin(); it != m_modules.cend(); ++it) {
         KDEDModule *module(it.value());
 
         // first disconnect otherwise slotKDEDModuleRemoved() is called
@@ -131,7 +132,7 @@ static int phaseForModule(const KPluginMetaData &module)
 
 QVector<KPluginMetaData> Kded::availableModules() const
 {
-    QVector<KPluginMetaData> plugins = KPluginMetaData::findPlugins(QStringLiteral("kf5/kded"));
+    QVector<KPluginMetaData> plugins = KPluginMetaData::findPlugins(QStringLiteral("kf" QT_STRINGIFY(QT_VERSION_MAJOR) "/kded"));
     QSet<QString> moduleIds;
     for (const KPluginMetaData &md : std::as_const(plugins)) {
         moduleIds.insert(md.pluginId());
@@ -161,7 +162,7 @@ QVector<KPluginMetaData> Kded::availableModules() const
 
 static KPluginMetaData findModule(const QString &id)
 {
-    KPluginMetaData module(QStringLiteral("kf5/kded/") + id);
+    KPluginMetaData module(QStringLiteral("kf" QT_STRINGIFY(QT_VERSION_MAJOR) "/kded/") + id);
     if (module.isValid()) {
         return module;
     }
@@ -411,11 +412,10 @@ void Kded::slotApplicationRemoved(const QString &name)
 #endif
     m_serviceWatcher->removeWatchedService(name);
     const QList<qlonglong> windowIds = m_windowIdList.value(name);
-    for (QList<qlonglong>::ConstIterator it = windowIds.begin(); it != windowIds.end(); ++it) {
-        qlonglong windowId = *it;
-        m_globalWindowIdList.remove(windowId);
+    for (const auto id : windowIds) {
+        m_globalWindowIdList.remove(id);
         for (KDEDModule *module : std::as_const(m_modules)) {
-            Q_EMIT module->windowUnregistered(windowId);
+            Q_EMIT module->windowUnregistered(id);
         }
     }
     m_windowIdList.remove(name);
@@ -428,15 +428,23 @@ void Kded::updateDirWatch()
     }
 
     delete m_pDirWatch;
-    m_pDirWatch = new KDirWatch;
+    m_pDirWatch = new KDirWatch(this);
 
     QObject::connect(m_pDirWatch, &KDirWatch::dirty, this, &Kded::update);
     QObject::connect(m_pDirWatch, &KDirWatch::created, this, &Kded::update);
     QObject::connect(m_pDirWatch, &KDirWatch::deleted, this, &Kded::dirDeleted);
 
     // For each resource
-    for (QStringList::ConstIterator it = m_allResourceDirs.constBegin(); it != m_allResourceDirs.constEnd(); ++it) {
-        readDirectory(*it);
+    for (const QString &dir : std::as_const(m_allResourceDirs)) {
+        readDirectory(dir);
+    }
+
+    QStringList dataDirs = QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+    for (auto &dir : dataDirs) {
+        dir += QLatin1String("/icons");
+        if (!m_pDirWatch->contains(dir)) {
+            m_pDirWatch->addDir(dir, KDirWatch::WatchDirOnly);
+        }
     }
 }
 
@@ -454,10 +462,10 @@ void Kded::updateResourceList()
 
     const QStringList dirs = KSycoca::self()->allResourceDirs();
     // For each resource
-    for (QStringList::ConstIterator it = dirs.begin(); it != dirs.end(); ++it) {
-        if (!m_allResourceDirs.contains(*it)) {
-            m_allResourceDirs.append(*it);
-            readDirectory(*it);
+    for (const auto &dir : dirs) {
+        if (!m_allResourceDirs.contains(dir)) {
+            m_allResourceDirs.append(dir);
+            readDirectory(dir);
         }
     }
 }
@@ -515,9 +523,16 @@ void Kded::dirDeleted(const QString &path)
     update(path);
 }
 
-void Kded::update(const QString &)
+void Kded::update(const QString &path)
 {
-    m_pTimer->start(10000);
+    if (path.endsWith(QLatin1String("/icons")) && m_pDirWatch->contains(path)) {
+        // If the dir was created or updated there could be new folders to merge into the active theme(s)
+        QDBusMessage message = QDBusMessage::createSignal(QStringLiteral("/KIconLoader"), QStringLiteral("org.kde.KIconLoader"), QStringLiteral("iconChanged"));
+        message << 0;
+        QDBusConnection::sessionBus().send(message);
+    } else {
+        m_pTimer->start(1000);
+    }
 }
 
 void Kded::readDirectory(const QString &_path)
@@ -587,11 +602,10 @@ KUpdateD::KUpdateD()
     connect(m_pTimer, &QTimer::timeout, this, &KUpdateD::runKonfUpdate);
     QObject::connect(m_pDirWatch, &KDirWatch::dirty, this, &KUpdateD::slotNewUpdateFile);
 
-    const QStringList dirs = QStandardPaths::locateAll(QStandardPaths::GenericDataLocation, QStringLiteral("kconf_update"), QStandardPaths::LocateDirectory);
-    for (QStringList::ConstIterator it = dirs.begin(); it != dirs.end(); ++it) {
-        QString path = *it;
+    QStringList dirs = QStandardPaths::locateAll(QStandardPaths::GenericDataLocation, QStringLiteral("kconf_update"), QStandardPaths::LocateDirectory);
+    for (auto &path : dirs) {
         Q_ASSERT(path != QDir::homePath());
-        if (path[path.length() - 1] != QLatin1Char('/')) {
+        if (!path.endsWith(QLatin1Char('/'))) {
             path += QLatin1Char('/');
         }
 
@@ -733,7 +747,7 @@ int main(int argc, char *argv[])
     QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
     // Also register as all the names we should respond to (org.kde.kcookiejar, org.kde.khotkeys etc.)
     // so that the calling code is independent from the physical "location" of the service.
-    const QVector<KPluginMetaData> plugins = KPluginMetaData::findPlugins(QStringLiteral("kf5/kded"));
+    const QVector<KPluginMetaData> plugins = KPluginMetaData::findPlugins(QStringLiteral("kf" QT_STRINGIFY(QT_VERSION_MAJOR) "/kded"));
     for (const KPluginMetaData &metaData : plugins) {
         const QString serviceName = metaData.value(QStringLiteral("X-KDE-DBus-ServiceName"));
         if (serviceName.isEmpty()) {
@@ -758,7 +772,7 @@ int main(int argc, char *argv[])
 
     KCrash::setFlags(KCrash::AutoRestart);
 
-    Kded *kded = new Kded();
+    std::unique_ptr<Kded> kded = std::make_unique<Kded>();
 
     kded->recreate(true); // initial
 
@@ -768,9 +782,5 @@ int main(int argc, char *argv[])
 
     runKonfUpdate(); // Run it once.
 
-    int result = app.exec(); // keep running
-
-    delete kded;
-
-    return result;
+    return app.exec(); // keep running
 }

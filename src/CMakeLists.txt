@@ -23,6 +23,7 @@ target_link_libraries(kded5
     KF5::CoreAddons # Needed for KDirWatch
     KF5::DBusAddons # Needed for kdedmodule.h
     KF5::Crash # Sets it as autostart
+    KF5::ConfigCore
 )
 if(APPLE)
     target_link_libraries(kded5 "-framework CoreFoundation")
@@ -31,7 +32,7 @@ target_compile_definitions(kded5 PRIVATE
     KCONF_UPDATE_EXE="$<TARGET_FILE:KF5::kconf_update>"
 )
 
-install(TARGETS kded5 ${KF5_INSTALL_TARGETS_DEFAULT_ARGS} )
+install(TARGETS kded5 ${KF_INSTALL_TARGETS_DEFAULT_ARGS} )
 
 configure_file(plasma-kded.service.in
                ${CMAKE_CURRENT_BINARY_DIR}/plasma-kded.service @ONLY)
@@ -43,7 +44,9 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.kde.kded5.xml DESTINATION ${KDE_IN
 
 kdbusaddons_generate_dbus_service_file(kded5 org.kde.kded5 ${KDE_INSTALL_FULL_BINDIR})
 
-install( FILES kdedmodule.desktop DESTINATION  ${KDE_INSTALL_KSERVICETYPESDIR} )
+if(QT_MAJOR_VERSION EQUAL "5")
+    install( FILES kdedmodule.desktop DESTINATION  ${KDE_INSTALL_KSERVICETYPESDIR} )
+endif()
 
 ecm_qt_install_logging_categories(
     EXPORT KDED
