@@ -4,6 +4,8 @@
 Name=KDED
 Name[ar]=العمومية
 Name[az]=KDED
+Name[be]=KDED
+Name[bg]=KDED
 Name[ca]=KDED
 Name[ca@valencia]=KDED
 Name[cs]=KDED
@@ -19,7 +21,9 @@ Name[fr]=KDED
 Name[hi]=केडीईडी
 Name[hu]=KDED
 Name[ia]=KDED
+Name[is]=KDED
 Name[it]=KDED
+Name[ka]=KDED
 Name[ko]=KDED
 Name[lt]=KDED
 Name[nl]=KDED
@@ -39,7 +43,7 @@ Name[uk]=KDED
 Name[vi]=KDED
 Name[x-test]=xxKDEDxx
 Name[zh_CN]=KDED
+Name[zh_TW]=KDED
 Type=Service
 Icon=kde-frameworks
 NoDisplay=true
-
